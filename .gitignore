@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.json
+.predict_day_cache/
+.DS_Store
+data/
