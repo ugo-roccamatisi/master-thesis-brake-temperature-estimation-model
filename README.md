@@ -2,6 +2,8 @@
 
 A 14-node lumped-parameter thermal model of an aircraft wheel and brake assembly, with a full calibration and prediction pipeline: automatic flight segmentation from CSV, robust touchdown detection, kinematic braking-energy reconstruction, multi-start Nelder-Mead calibration, full-day prediction with a sensitivity envelope, as a command line tool and a Streamlit app.
 
+![The 14-node thermal network](docs/btem-network.png)
+
 Developed within my Master's thesis with Airbus and Cranfield University (*Physics-Based Lumped-Parameter Thermal Modelling of Aircraft Wheel Assembly to Estimate Brake Temperature on an In-Service A320*, supervised by Dr Fakhre Ali). **This is a sanitized release**: every calibrated parameter value has been replaced by a generic placeholder, and every flight identifier, timestamp and path by an example. No flight data, no fitted values, no derived quantities from confidential data are included. The pipeline is designed to calibrate itself on whatever data you feed it.
 
 ## Layout
@@ -23,6 +25,14 @@ streamlit run app.py
 ```
 
 Feed it a flight CSV (ground speed, radio altitude, brake temperature, gross weight); the pipeline segments, calibrates and predicts.
+
+## Gallery
+
+| | |
+|---|---|
+| ![Wheel-brake assembly](docs/btem-assembly.png) | ![Heat transfer mechanisms](docs/btem-mechanisms.png) |
+
+All figures are methodology schematics from the thesis; no data plots are included.
 
 ## Companion project
 
