@@ -1,0 +1,394 @@
+================================================================================
+BTEM -- Brake Temperature Estimation Model (A320)
+Prediction of brake temperature (BTMS) over a day of flights
+================================================================================
+
+This pipeline predicts the brake temperature sensor reading (BTMS) across a
+whole day of flights, from ordinary flight-data-recorder CSVs. It reconstructs
+the braking energy from the aircraft's own speed and weight, runs a 14-node
+lumped-mass thermal model of the wheel assembly, and carries the temperature
+continuously across the parking gaps between flights.
+
+
+FILES
+--------------------------------------------------------------------------------
+  btem_v5_full_flight.py   The physics: 14-node thermal model, phases,
+                                ODE integration. Imported as `m` everywhere.
+  predict_day_from_csv.py       The pipeline: CSV loading, flight segmentation,
+                                energy reconstruction, calibration, prediction,
+                                figures. Usable as a library or as a CLI.
+  app.py                        Streamlit web interface over the pipeline.
+
+Requires: numpy, pandas, scipy, matplotlib (+ streamlit for the app).
+
+
+================================================================================
+1. INPUT CSV FORMAT
+================================================================================
+
+One CSV covering a whole day, OR several per-flight CSVs -- they are laid end
+to end by their own Timestamp column, so the order you pass them in does not
+matter, and the real parking gaps between flights come straight from the
+timestamps rather than being guessed.
+
+The separator is auto-detected and the file is read as UTF-8 (BOM tolerated).
+Column names are stripped of surrounding whitespace but are otherwise matched
+EXACTLY, including case, spaces and the degree sign.
+
+REQUIRED COLUMNS
+  Timestamp                       Date and time of the sample.
+                                  Format: YYYY/MM/DD HH:MM:SS.fffT
+                                  (e.g. 2025/10/01 05:41:30.000T)
+                                  Rows that fail to parse are dropped; if none
+                                  parse, the file is rejected.
+  GROUND SPEED                    Aircraft ground speed [kt].
+  GROSS WEIGHT                    Aircraft mass. Either kg or lb: values above
+                                  mass_lb_threshold (default 80000) are assumed
+                                  to be in lb and converted automatically.
+  Static Air Temperature [BNR]    Outside air temperature [deg C].
+  Temperature Brake n°1           Measured BTMS [deg C] for brake 1. One column
+   ... Temperature Brake n°4      per braked wheel; which one is used is chosen
+                                  by the `wheel` argument (default 1).
+  LH L/G COMPRESSED               Weight-on-wheels discrete (non-zero = the
+   or RH L/G COMPRESSED           gear is compressed, i.e. on ground). LH is
+                                  used if present, else RH. This is the single
+                                  source of the on-ground/airborne distinction
+                                  -- see "What the gear signal drives" below.
+
+OPTIONAL COLUMN
+  Thrust_Reverser_Cowl_Position   Reverse-thrust position. If absent, reverse
+                                  thrust simply contributes nothing to the
+                                  landing-roll force balance.
+
+Notes
+  - Sampling interval is not fixed; the pipeline works from the timestamps.
+    The commercial data this was built on is 30 s.
+  - Missing values are tolerated (NaN rows are filtered per channel).
+  - A real recording gap between two consecutive CSVs is expected and handled:
+    it is detected as a parking gap and the flight boundary is placed inside it.
+
+WHAT THE GEAR SIGNAL DRIVES
+  L/G COMPRESSED is read once per segment, debounced, and used for two things:
+
+  1. on_ground(t) -- the airborne/on-ground flag the thermal model queries at
+     every integration step during the pre-touchdown 'flight' phase. It decides
+     which regime applies: airborne behaves like parking, on-ground behaves
+     like taxi or landing. It also decides whether the brakes see outside air
+     or the closed gear-bay temperature.
+
+  2. Lift-off time -- the LAST on-ground-to-airborne transition before
+     touchdown. That instant starts the gear-retraction cooling window, during
+     which the gear is still down and the assembly still sees a real airstream.
+
+  Debouncing (lg_debounce_s, default 5 s) bridges brief dropouts in the signal
+  so a bounce or a momentary dip does not flicker the phase back and forth.
+
+  Ground speed is used separately, for flight segmentation and touchdown
+  detection. The two signals are not interchangeable: ground speed cannot tell
+  you when the wheels left the ground, and the gear discrete cannot tell you
+  when a flight begins or ends.
+
+ON ALTITUDE
+  The physics module can use a pressure-altitude column to place the approach
+  cooling window (when the gear comes back down below h_approach_ft). The
+  commercial pipeline deliberately does NOT: altitude in these files is
+  referenced to sea level, so it says nothing about height above the runway,
+  and airfield elevation varies from one destination to the next. A sea-level
+  altitude cannot tell you when the gear was actually extended.
+
+  So the approach window falls back to a fixed duration before touchdown
+  (approach_fallback_s, default 100 s -- roughly 2000 ft at a typical descent
+  rate). If you have a radio-altitude or height-above-threshold channel, that
+  would be the correct signal to use instead, and would remove this
+  approximation.
+
+
+================================================================================
+2. USING THE APPLICATION
+================================================================================
+
+  streamlit run app.py
+
+STEP 1 -- Load and segment
+  Upload one whole-day CSV or several per-flight CSVs. Two settings control how
+  the day is cut into flights:
+    - Minimum parked duration to count as a gap  (default 20 min)
+    - Ground speed below which the aircraft is parked  (default 0 kt)
+  A "parking gap" is any stretch where ground speed stays below the threshold
+  for at least that duration; each stretch between two gaps is one flight,
+  labelled flight_01, flight_02, ...
+
+  A segmentation figure (ground speed with each detected flight shaded) is
+  shown so you can check the split BEFORE calibrating on it. If a flight is
+  cut in two, or two flights are merged, adjust the minimum parked duration.
+
+STEP 2 -- Calibrate and predict
+  Choose which flights to predict (all / a single one / a range), then the
+  calibration source:
+
+    "Fit on flight_01"  Calibrates on the FIRST flight in the file, then
+                        applies that calibration to the flights you selected.
+                        Results are cached (see .predict_day_cache/), keyed on
+                        the data itself, so re-running is fast.
+    "Use an already-    Either upload a calibration JSON produced by this
+     calibrated set"    pipeline, or type the values in by hand. Nothing is
+                        averaged for you -- if you want an average of several
+                        calibrations, average them yourself first.
+
+  Gap model -- how the inter-flight gaps are filled:
+    exp_gap1   A Newton's-law-of-cooling exponential whose k and T_amb are
+               fitted ONCE on the day's first gap and reused unchanged for
+               every later gap; only the peak temperature varies. This is the
+               one to use -- see 3.5.
+    h_nat      Keeps simulating through the gap instead. Selected by default in
+               the interface and on the CLI, for backwards compatibility.
+
+STEP 3 -- Results
+  Predicted vs measured BTMS (normalised and absolute), a per-gap error table,
+  an optional uncertainty/relative-error diagnostic, a CSV export of the
+  predicted and measured series, and the full run log.
+
+The aircraft and thermal constants (see section 4) are editable directly in
+the interface, with a reset button and a live count of values that differ from
+the A320 defaults.
+
+COMMAND LINE
+The same pipeline runs headless:
+
+  python predict_day_from_csv.py --csv day.csv --calibration fit-first
+  python predict_day_from_csv.py --csv flight_a.csv flight_b.csv \
+      --flights 1-2 --gap-model exp_gap1 --envelope --out-csv result.csv
+
+  --csv                 one or more CSVs (order irrelevant)
+  --flights             'all', '2', '2-4' or '1,3,4' (1-based, chronological)
+  --calibration         'fit-first', or 'default' with --core-json-a/-b
+  --min-park-gap-min    minimum parked duration for a gap (default 20)
+  --park-kt             parked ground-speed threshold (default 0)
+  --gap-model           'h_nat' (default) or 'exp_gap1' (recommended, see 3.5)
+  --envelope            also compute the combined-uncertainty band
+  --check-segmentation  show the segmentation figure before calibrating
+  --no-cache            always refit, ignore the calibration cache
+  --out-csv             export predicted + measured series
+  --out-calibration-json  save the calibration that was used
+
+  python predict_day_from_csv.py --help    for the full list, including every
+                                           aircraft/thermal constant override.
+
+
+================================================================================
+3. HOW IT WORKS
+================================================================================
+
+3.1 SEGMENTATION
+  The day is split into flights on ground speed alone (see step 1 above).
+  Within each flight, touchdown is detected as the last sample above
+  v_td_threshold_kt (default 110 kt) before the roll-out -- the "rule_100kt".
+  A detected touchdown speed outside v_td_plausible (110-165 kt) is flagged.
+
+3.2 ENERGY RECONSTRUCTION
+  There is no braking-torque channel in commercial data, so brake energy is
+  reconstructed from the aircraft's own motion. Three regimes:
+
+  Taxi-out and taxi-in (delta-V)
+      Every decelerating interval has its full kinetic-energy loss attributed
+      to the brakes; accelerating or steady intervals contribute nothing.
+      Summing per interval telescopes to each deceleration phase's own
+      (v_start^2 - v_end^2), so no phase-boundary bookkeeping is needed.
+
+  Landing roll (force balance)
+      Brake force is what is left of the deceleration once aerodynamic drag,
+      rolling resistance, spoiler drag and reverse thrust are subtracted:
+          F_brake = m*a - F_drag - F_roll - F_spoiler - F_reverse
+      Each raw interval is sub-stepped (n_sub_land, default 10) because a 30 s
+      sample is far too coarse for a roll-out that lasts under a minute.
+
+  The reconstructed energy is divided equally among n_brakes (default 4).
+
+3.3 THERMAL MODEL
+  14 nodes: 9 discs (S1-R1-S2-R2-S3-R3-S4-R4-S5), torque tube, wheel/rim,
+  BTMS sensor, heat shield, piston housing. Heat enters at the friction
+  surfaces and leaves by conduction, radiation and convection. Four phases,
+  each with its own conduction and convection regime:
+
+      landing   forced convection at real speed, discs clamped
+      taxi      reduced inter-disc conduction, radiative S1<->housing
+      parking   natural convection only, no heat input
+      flight    pre-touchdown; maps onto the three above -- airborne behaves
+                like parking, on-ground-not-braking like taxi, on-ground-
+                braking like landing (decided on TORQUE, not speed)
+
+  Two airborne exceptions matter: for T_RETRACT_S after lift-off the gear is
+  still down with the bay open, and below h_approach_ft on approach it is
+  extended again -- in both windows the assembly sees a real airstream. In
+  between, the gear is stowed and the brakes see the bay temperature t_bay_c
+  rather than outside air.
+
+3.4 CALIBRATION
+  Two stages, both by Nelder-Mead in log space:
+
+  Core (7 parameters)  C_tube, G_ST, tau, eps_DT, G_RW, h_nat, eps_T
+      Fitted on the calibration flight's post-touchdown window, with an anchor
+      on the last measured point so the tail can't drift.
+
+  Pre-touchdown (3 parameters)  alpha, H_nat_flight, taxi pulse duration
+      alpha scales how much reconstructed energy actually reaches the heat
+      pack. H_nat_flight is a separate natural-convection coefficient for the
+      'flight' phase: h_nat is fitted on a ~36 s touchdown transient where
+      natural convection barely matters, but cruise spends hours in exactly
+      that regime, so forcing the two to be equal is a much stronger
+      assumption there than at touchdown.
+
+3.5 GAPS BETWEEN FLIGHTS
+  Whichever model is used, the temperature reached at the end of a gap is the
+  initial condition of the next flight, so a whole day runs as one continuous
+  thermal history.
+
+  exp_gap1 -- exponential (the model to use in practice)
+      A parking gap lasts hours, far longer than anything the thermal model is
+      calibrated on, so the gap is bridged by Newton's law of cooling instead
+      of by continued simulation:
+
+          T(t) = T_amb + (T_peak - T_amb) * exp(-k * (t - t_peak))
+
+      k and T_amb are fitted ONCE, on the day's FIRST gap, and reused unchanged
+      for every later gap of that day; only T_peak varies, being each flight's
+      own peak. The fit runs from the measured peak of flight N to the first
+      local minimum of flight N+1, by linear regression of ln(T - T_amb)
+      against time. T_amb is not a free parameter -- it is the mean of both
+      flights' own ambient sensor.
+
+      Physics resumes at the START of the next flight's own recording, so one
+      smooth curve covers the whole parked-plus-taxi-out period rather than
+      handing back to simulation partway through.
+
+  h_nat -- continuous physics (the alternative)
+      Keeps simulating through the gap: neutral h_nat governs from touchdown of
+      flight N until the first moment ground speed leaves zero on flight N+1
+      (movement alone ends the "parked" regime, whether or not braking has
+      started), then H_NAT_FLIGHT resumes through the next touchdown. This
+      extrapolates h_nat -- fitted on a ~36 s touchdown transient -- across
+      several hours, which is exactly the assumption the exponential avoids.
+
+3.6 UNCERTAINTY (optional)
+  The calibrated model is re-run on its own calibration flight and the relative
+  model/measurement error is RMS-averaged within each phase. That per-phase
+  rate, multiplied by the predicted temperature, gives u_BDT; combined in
+  quadrature with the sensor uncertainty u_bts_c it gives u_c, drawn as a band
+  around the prediction. A tolerance limit u_tol_c is shown alongside, with a
+  drift flag wherever u_c exceeds it.
+
+  Inter-flight gaps are deliberately EXCLUDED from this band: the per-phase
+  rates are fitted on a flight's own phases and say nothing about a multi-hour
+  parking gap, so u_c is left undefined there rather than reusing a rate that
+  does not apply.
+
+  Both u_bts_c and u_tol_c are UNVERIFIED placeholders -- u_tol_c in particular
+  is a policy choice, not a measured quantity. Replace them with real values
+  before drawing conclusions from the drift flag.
+
+
+================================================================================
+4. ADAPTING TO ANOTHER AIRCRAFT
+================================================================================
+
+Most of what is A320-specific is numbers, and those are all exposed. But not
+all of it: if the new aircraft's wheel and brake architecture differs
+structurally from the one modelled here -- a different number of discs, a
+different heat path, extra or missing hardware -- then the node structure
+itself has to be reworked in btem_v5_full_flight.py, and that is a real
+modelling exercise, not a configuration change. Establish that first (see
+layer 4), because it decides whether the rest of this section is enough.
+
+There are four layers to change, in increasing order of effort.
+
+LAYER 1 -- AIRCRAFT CONSTANTS  (AIRCRAFT_DEFAULTS, 25 entries)
+  Airframe aerodynamics and detection thresholds. Editable in the app, by CLI
+  flag, or by configure_constants() from a script. The ones that matter most:
+
+    n_brakes             number of braked wheels sharing the energy
+    a_wing, c_d          wing reference area [m2] and drag coefficient
+    mu_rr                rolling-resistance coefficient
+    n_sp, l_sp, b_sp,    spoiler count, dimensions, maximum deflection and
+      theta_max_deg, c_sp  drag coefficient
+    k_rt, v_th_rev_kt    reverse-thrust force [N] and its cut-off speed
+    v_td_threshold_kt    touchdown detection threshold -- MUST be revisited:
+      v_td_plausible     110 kt suits an A320, not a regional turboprop or a
+                         widebody
+    mass_lb_threshold    kg/lb auto-detection cut-off; scale it with the type
+    climb_duration_s     stand-in for the climb-to-cruise transition, since
+                         no usable height-above-ground channel is available
+                         (see "On altitude" in section 1)
+
+LAYER 2 -- BRAKE HARDWARE  (THERMAL_MODULE_DEFAULTS, 43 entries)
+  Geometry, materials, conductances, emissivities and timing of the wheel and
+  brake assembly itself. Also editable in the app or by CLI flag. Includes disc
+  radii and thickness, rim dimensions, exposed areas, carbon density/specific
+  heat/conductivity, the non-fitted conductances (G_PH, G_SP, G_SW), the
+  emissivities other than the two that are fitted, and the phase timings
+  (t_retract_s, h_approach_ft, t_bay_c, v_taxi_kt).
+
+  A different brake on the same airframe changes this layer and not layer 1.
+
+LAYER 3 -- RECALIBRATION  (mandatory)
+  Changing constants is not enough. The 7 core parameters and the 3
+  pre-touchdown parameters are fitted quantities and MUST be re-fitted on the
+  new aircraft's own data. Do not carry A320 values over.
+
+  The practical route: take one flight of the new type with good BTMS data,
+  run the app in "fit-first" mode on it, check the fit against the measured
+  post-touchdown curve, then use that calibration for the rest of the day.
+
+  Watch for parameters landing exactly on a bound -- that usually means the
+  parameter is compensating for something wrong elsewhere in the model rather
+  than converging on a physical value.
+
+LAYER 4 -- WHEEL AND BRAKE ARCHITECTURE  (only if the hardware differs)
+  Everything above assumes the assembly this model was built for: a 9-disc
+  carbon stack (5 stators S1..S5 alternating with 4 rotors R1..R4), a torque
+  tube carrying the stators, a wheel/rim carrying the rotors, a heat shield
+  between discs and rim, a piston housing, and the BTMS sensor on the tube.
+  That is 14 nodes, and it is hard-coded in btem_v5_full_flight.py:
+  the node indices, the is_rotor mask, and every conduction, radiation and
+  convection term in rhs() are written against that layout.
+
+  If the new aircraft's brake differs structurally, no amount of constant
+  editing will express it. You would need to:
+    - resize the stack: labels, ND, is_rotor, and the node indices
+      (I_TUBE, I_WHEEL, I_SENS, I_SHIELD, I_PIST) and N;
+    - revisit rhs() term by term, since each one loops over that structure;
+    - re-check where the BTMS sensor actually sits -- the whole model is
+      calibrated against that one measurement, so a sensor mounted elsewhere
+      changes what is being fitted;
+    - re-derive the exposed areas (A_ct, A_cw, A_cp, A_S1P, the end faces)
+      from the new drawings rather than scaling the A320 ones.
+
+  This is where the real work is if the hardware is genuinely different. Steel
+  brakes rather than carbon would additionally change the material model
+  (rho_c, cp_c, kz_c are carbon values, and specific heat is treated as
+  constant with temperature).
+
+  Determine early which case you are in: same architecture with different
+  dimensions (layers 1-3 suffice) or a different architecture (layer 4 first).
+
+WHAT TO CHECK FIRST ON NEW DATA
+  1. Do the column names match exactly, degree sign included? Rename or map
+     them if not.
+  2. Does the Timestamp format parse? It is matched strictly.
+  3. Is the segmentation figure right -- the expected number of flights, with
+     each touchdown where you expect it?
+  4. Is the detected touchdown speed plausible for the type? If it sits at the
+     edge of v_td_plausible, adjust v_td_threshold_kt.
+  5. Does the core fit reproduce the measured post-touchdown cooling? If not,
+     no amount of downstream tuning will help.
+
+KNOWN LIMITATIONS
+  - Flight segmentation is a heuristic on ground speed alone; it has not been
+    validated against a real multi-flight-per-file CSV. Always check the
+    segmentation figure.
+  - No usable height-above-ground channel: the altitude in these files is
+    referenced to sea level, so the approach window falls back to a fixed
+    duration before touchdown and the climb transition to a fixed duration
+    after take-off (see "On altitude" in section 1). A radio-altitude channel
+    would remove both approximations.
+  - Brake fan state is unknown in commercial data and is assumed off.
+  - u_bts_c and u_tol_c are placeholders (see 3.6).

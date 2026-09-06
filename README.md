@@ -8,14 +8,21 @@ Developed within my Master's thesis with Airbus and Cranfield University (*Physi
 
 ## Layout
 
-| File | Role |
-|---|---|
-| `btem_v5_full_flight.py` | The 14-node thermal model and full-flight simulation |
-| `btem_pipeline_with_eps_T.py` | Calibration pipeline (single source of truth) |
-| `predict_day_from_csv.py` | Generalist CLI: segmentation, calibration, full-day prediction |
-| `app.py` | Streamlit application on top of the pipeline |
-| `calibrate_all_with_eps_T.py` | Batch calibration over flights and wheels |
-| `compare_landing_taxi_energy.py` | Kinematic energy reconstruction vs torque comparison |
+```text
+.
+├── btem_v5_full_flight.py           # The physics: 14-node thermal model, phases, ODE integration
+├── btem_pipeline_with_eps_T.py      # Calibration pipeline (single source of truth)
+├── predict_day_from_csv.py          # Generalist CLI: segmentation, calibration, full-day prediction
+├── app.py                           # Streamlit application on top of the pipeline
+├── calibrate_all_with_eps_T.py      # Batch calibration over flights and wheels
+├── compare_landing_taxi_energy.py   # Kinematic energy reconstruction vs torque comparison
+├── illustrate_core_second_anchor.py # Calibration anchor illustration
+├── plot_all_nodes_day.py            # All-node temperature plots over a day
+├── docs/                            # Methodology schematics from the thesis (no data plots)
+└── USAGE.txt                        # Detailed usage guide: CSV format, CLI, behaviours
+```
+
+A full usage guide (input CSV format, expected columns, CLI arguments and behaviours) is in [USAGE.txt](USAGE.txt).
 
 ## Run it
 
