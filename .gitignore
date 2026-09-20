@@ -4,3 +4,4 @@ __pycache__/
 .predict_day_cache/
 .DS_Store
 data/
+examples/synthetic_day.csv

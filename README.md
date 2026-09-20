@@ -19,19 +19,34 @@ Developed within my Master's thesis with Airbus and Cranfield University (*Physi
 ├── illustrate_core_second_anchor.py # Calibration anchor illustration
 ├── plot_all_nodes_day.py            # All-node temperature plots over a day
 ├── docs/                            # Methodology schematics from the thesis (no data plots)
-└── USAGE.txt                        # Detailed usage guide: CSV format, CLI, behaviours
+├── examples/generate_synthetic_csv.py # Generates a non-scientific input-format demo
+├── requirements.txt                 # Python dependencies
+├── docs/usage.md                    # Quick-start input schema and CLI guide
+└── docs/usage-reference.txt         # Complete technical operating reference
 ```
 
-A full usage guide (input CSV format, expected columns, CLI arguments and behaviours) is in [USAGE.txt](USAGE.txt).
+A quick-start guide is in [docs/usage.md](docs/usage.md), with the complete
+technical reference preserved in [docs/usage-reference.txt](docs/usage-reference.txt).
 
 ## Run it
 
 ```bash
-pip install numpy scipy matplotlib pandas streamlit
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 streamlit run app.py
 ```
 
 Feed it a flight CSV (ground speed, radio altitude, brake temperature, gross weight); the pipeline segments, calibrates and predicts.
+
+To inspect the expected CSV structure without proprietary data:
+
+```bash
+python examples/generate_synthetic_csv.py
+python predict_day_from_csv.py --csv examples/synthetic_day.csv --check-segmentation
+```
+
+The generated series is only an ingestion and interface demo. It is not an A320 validation dataset and must not be used to assess model accuracy.
 
 ## Gallery
 
@@ -44,3 +59,7 @@ All figures are methodology schematics from the thesis; no data plots are includ
 ## Companion project
 
 The physics-informed neural network counterpart, on synthetic data: [pinn-brake-stack](https://github.com/ugo-roccamatisi/pinn-brake-stack). More on my [portfolio](https://ugo-roccamatisi.github.io).
+
+## Licence
+
+The source is published for technical review. See [LICENSE](LICENSE): no reuse or redistribution permission is granted without written authorisation.
