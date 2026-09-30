@@ -75,8 +75,6 @@ Important options:
 - `--out-csv`: export measured and predicted temperatures.
 
 Run `python predict_day_from_csv.py --help` for the complete option list.
-The original full operating reference, including detailed model behaviour and
-troubleshooting notes, is preserved in [usage-reference.txt](usage-reference.txt).
 
 ## Operating assumptions and limitations
 

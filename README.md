@@ -21,12 +21,10 @@ Developed within my Master's thesis with Airbus and Cranfield University (*Physi
 ├── docs/                            # Methodology schematics from the thesis (no data plots)
 ├── examples/generate_synthetic_csv.py # Generates a non-scientific input-format demo
 ├── requirements.txt                 # Python dependencies
-├── docs/usage.md                    # Quick-start input schema and CLI guide
-└── docs/usage-reference.txt         # Complete technical operating reference
+└── docs/usage.md                    # Input schema and CLI guide
 ```
 
-A quick-start guide is in [docs/usage.md](docs/usage.md), with the complete
-technical reference preserved in [docs/usage-reference.txt](docs/usage-reference.txt).
+A usage guide is in [docs/usage.md](docs/usage.md).
 
 ## Run it
 
